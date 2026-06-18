@@ -490,8 +490,8 @@ def make_summary(weekly: pd.DataFrame, switch_log: pd.DataFrame, start: str, end
     lines.append("## How to judge this backtest")
     lines.append("- Good: 2020 COVID crash risk expansion shifts to 514 before or during the main drawdown, not after the entire bear market is over.")
     lines.append("- Good: R/433 does not trigger on every short bear-market bounce.")
-    lines.append("- R3 strict filter remains: 433 requires R>=4/5, total_score<=35, credit_proxy_score<12, market_momentum_score<20, and 3 consecutive weekly confirmations by default.
-- R4 fast lane: after a true panic regime, if VIX cools sharply and QQQ/SOXX/credit regain 20D trends, 514 can release to 452 earlier; 433 still needs extra confirmation.")
+    lines.append("- R3 strict filter remains: 433 requires R>=4/5, total_score<=35, credit_proxy_score<12, market_momentum_score<20, and 3 consecutive weekly confirmations by default.")
+    lines.append("- R4 fast lane: after a true panic regime, if VIX cools sharply and QQQ/SOXX/credit regain 20D trends, 514 can release to 452 earlier; 433 still needs extra confirmation.")
     lines.append("- Good: Once capital returns, the model can leave 514 instead of staying permanently defensive.")
     lines.append("- Bad: Model stays 452 through the main drawdown.")
     lines.append("- Bad: Model flips between 452/514/433 too often.")
