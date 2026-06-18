@@ -159,7 +159,7 @@ def score_defensive_strength(df: pd.DataFrame) -> pd.Series:
 
 def compute_r_mode(df: pd.DataFrame, components: pd.DataFrame) -> pd.DataFrame:
     """
-    Stricter V11 R-mode rules plus R4 V-shaped rebound fast lane and R7 stricter medium repair lane.
+    Stricter V11 R-mode rules plus R4 V-shaped rebound fast lane and R7.1 stricter medium repair lane.
 
     R2 fixed:
     - 433 triggered too early during bear-market rallies.
@@ -254,9 +254,17 @@ def compute_r_mode(df: pd.DataFrame, components: pd.DataFrame) -> pd.DataFrame:
         & (components["credit_proxy_score"] < 12)
     )
 
-    # R7: stricter medium repair lane.
+    # R7.1.1 anti-whipsaw filter for credit-crisis bottom chop.
+    # Fast lane may appear, but do not release 514 if total risk or credit stress remains high.
+    conds["fast_release_safe"] = (
+        conds["fast_release_confirm"]
+        & (components["total_score"] < 75)
+        & (components["credit_proxy_score"] < 12)
+    )
+
+    # R7.1: stricter medium repair lane.
     # For 2018 Q4-like corrections: VIX and score were elevated, but not a full 2020-style panic.
-    # R7 tightens R6 to avoid 2022-style bear-market rallies: momentum repair is mandatory, not just part of a score count.
+    # R7.1 tightens R6 to avoid 2022-style bear-market rallies: momentum repair is mandatory, not just part of a score count.
     recent_vix_peak_120d = vix.rolling(120, min_periods=20).max()
     recent_score_peak_120d = components["total_score"].rolling(120, min_periods=20).max()
     conds["medium_repair_regime"] = (
@@ -284,9 +292,9 @@ def compute_r_mode(df: pd.DataFrame, components: pd.DataFrame) -> pd.DataFrame:
         "medium_qqq_20d_return_positive",
     ]].sum(axis=1)
 
-    # R7 stricter medium lane:
+    # R7.1 stricter medium lane:
     # R6 allowed release when the count reached 7/9. In 2022 this allowed a bear-market rally
-    # to pass even while market_momentum_score was still weak. R7 makes the key repair
+    # to pass even while market_momentum_score was still weak. R7.1 makes the key repair
     # conditions mandatory. This should keep the 2018 Q1 repair path, but block 2022-08.
     conds["medium_release_confirm"] = (
         conds["medium_repair_regime"]
@@ -335,6 +343,7 @@ def apply_cooldown(weekly: pd.DataFrame, cooldown_weeks: int = 3) -> pd.DataFram
         r_confirm = bool(row.get("r_confirm", False))
         release_confirm = bool(row.get("release_confirm", False))
         fast_release_confirm = bool(row.get("fast_release_confirm", False))
+        fast_release_safe = bool(row.get("fast_release_safe", False))
         fast_r_confirm = bool(row.get("fast_r_confirm", False))
         medium_release_confirm = bool(row.get("medium_release_confirm", False))
 
@@ -352,20 +361,26 @@ def apply_cooldown(weekly: pd.DataFrame, cooldown_weeks: int = 3) -> pd.DataFram
             reason = "風險分數>=75，立即切514防守"
 
         elif current == "514" and fast_release_confirm:
-            # R5 fast lane: after a true panic regime, allow earlier release from 514 to 452.
+            # R7.1.1 fast-lane anti-whipsaw filter:
+            # Observe the V-shaped rebound, but do not release from 514 while
+            # emergency score or credit stress remains high.
             pending = None
             pending_count = 0
             r_pending_count = 0
-            fast_release_pending_count += 1
-            if fast_release_pending_count >= 1:
-                current = "452"
-                release_pending_count = 0
-                reason = "V型急殺後快速回攻通道成立，514→452"
+            if fast_release_safe:
+                fast_release_pending_count += 1
+                if fast_release_pending_count >= 1:
+                    current = "452"
+                    release_pending_count = 0
+                    reason = "R7.1.1快速回攻安全條件成立，514→452"
+                else:
+                    reason = f"R7.1.1快速回攻第{fast_release_pending_count}週觀察，暫維持514"
             else:
-                reason = f"快速回攻第{fast_release_pending_count}週觀察，暫維持514"
+                fast_release_pending_count = 0
+                reason = "快速回攻出現但信用/總分尚未安全，暫維持514"
 
         elif current == "514" and medium_release_confirm:
-            # R7 stricter medium lane: slower than 2020 fast lane, but avoids weak-momentum bear rallies.
+            # R7.1 stricter medium lane: slower than 2020 fast lane, but avoids weak-momentum bear rallies.
             pending = None
             pending_count = 0
             r_pending_count = 0
@@ -374,9 +389,9 @@ def apply_cooldown(weekly: pd.DataFrame, cooldown_weeks: int = 3) -> pd.DataFram
                 current = "452"
                 release_pending_count = 0
                 fast_release_pending_count = 0
-                reason = "R7中型修復通道連續2週成立，514→452"
+                reason = "R7.1中型修復通道連續2週成立，514→452"
             else:
-                reason = f"R7中型修復通道第{medium_release_pending_count}週觀察，暫維持514"
+                reason = f"R7.1中型修復通道第{medium_release_pending_count}週觀察，暫維持514"
 
         elif current == "514" and r_confirm:
             release_pending_count = 0
@@ -509,7 +524,7 @@ def make_switch_log(weekly: pd.DataFrame) -> pd.DataFrame:
     cols = [
         "total_score", "final_mode", "raw_mode", "r_count", "r_watch", "r_confirm",
         "r_credit_veto", "r_momentum_veto", "r_score_veto", "release_confirm",
-        "fast_count", "fast_release_confirm", "fast_r_confirm",
+        "fast_count", "fast_release_confirm", "fast_release_safe", "fast_r_confirm",
         "medium_repair_regime", "medium_count", "medium_release_confirm",
         "release_qqq_above_ma60", "release_soxx_above_ma60", "release_credit_above_ma60",
         "market_momentum_score", "credit_proxy_score", "breadth_score", "vix_score",
