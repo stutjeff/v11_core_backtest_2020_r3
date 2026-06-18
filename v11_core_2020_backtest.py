@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-V11-Core 2020 COVID Crash Event Backtest R3
+V11-Core 2020 COVID Crash Event Backtest R4
 
 Goal:
 - Test whether V11 can switch from 452 to 514 after COVID shock starts spreading through risk assets.
@@ -16,7 +16,7 @@ Outputs:
 
 Run:
     pip install -r requirements.txt
-    python v11_core_2022_backtest.py
+    python v11_core_2020_backtest.py
 """
 
 from __future__ import annotations
@@ -218,6 +218,34 @@ def compute_r_mode(df: pd.DataFrame, components: pd.DataFrame) -> pd.DataFrame:
         & conds["release_soxx_above_ma60"]
         & conds["release_credit_above_ma60"]
     )
+
+    # R4: V-shaped rebound fast lane.
+    # R3 worked for slow bear markets, but stayed defensive too long after the 2020 liquidity crash.
+    # This fast lane is only armed after a true panic regime, so ordinary bear-market bounces in 2022
+    # should not pass it unless VIX/score first reached crisis extremes.
+    recent_vix_peak_90d = vix.rolling(90, min_periods=10).max()
+    recent_score_peak_90d = components["total_score"].rolling(90, min_periods=10).max()
+    conds["fast_panic_regime"] = (recent_vix_peak_90d > 40) & (recent_score_peak_90d > 85)
+    conds["fast_vix_cooldown"] = (vix / recent_vix_peak_90d - 1.0) <= -0.40
+    conds["fast_qqq_above_ma20"] = qqq > ma(qqq, 20)
+    conds["fast_soxx_above_ma20"] = soxx > ma(soxx, 20)
+    conds["fast_credit_above_ma20"] = credit > ma(credit, 20)
+    conds["fast_qqq_20d_return_positive"] = safe_pct_change(qqq, 20) > 0
+    conds["fast_vix_below_35"] = vix < 35
+    conds["fast_count"] = conds[[
+        "fast_panic_regime",
+        "fast_vix_cooldown",
+        "fast_qqq_above_ma20",
+        "fast_soxx_above_ma20",
+        "fast_credit_above_ma20",
+        "fast_qqq_20d_return_positive",
+        "fast_vix_below_35",
+    ]].sum(axis=1)
+    conds["fast_release_confirm"] = conds["fast_count"] >= 5
+
+    # Fast 433 is still stricter than fast release: after leaving 514, the market must continue
+    # to confirm recovery instead of only bouncing for one week.
+    conds["fast_r_confirm"] = (conds["fast_count"] >= 6) & (components["credit_proxy_score"] < 12)
     return conds
 
 
@@ -244,12 +272,16 @@ def apply_cooldown(weekly: pd.DataFrame, cooldown_weeks: int = 3) -> pd.DataFram
     pending_count = 0
     r_pending_count = 0
     release_pending_count = 0
+    fast_release_pending_count = 0
+    fast_r_pending_count = 0
 
     for _, row in out.iterrows():
         raw = row["raw_mode"]
         score = float(row["total_score"])
         r_confirm = bool(row.get("r_confirm", False))
         release_confirm = bool(row.get("release_confirm", False))
+        fast_release_confirm = bool(row.get("fast_release_confirm", False))
+        fast_r_confirm = bool(row.get("fast_r_confirm", False))
 
         reason = "維持原模式"
 
@@ -259,10 +291,26 @@ def apply_cooldown(weekly: pd.DataFrame, cooldown_weeks: int = 3) -> pd.DataFram
             pending_count = 0
             r_pending_count = 0
             release_pending_count = 0
+            fast_release_pending_count = 0
+            fast_r_pending_count = 0
             reason = "風險分數>=75，立即切514防守"
+
+        elif current == "514" and fast_release_confirm:
+            # R4 fast lane: after a true panic regime, allow earlier release from 514 to 452.
+            r_pending_count = 0
+            release_pending_count = 0
+            fast_release_pending_count += 1
+            if fast_release_pending_count >= 1:
+                current = "452"
+                pending = None
+                pending_count = 0
+                reason = "V型急殺後快速回攻通道成立，514→452"
+            else:
+                reason = f"快速回攻第{fast_release_pending_count}週觀察，暫維持514"
 
         elif current == "514" and r_confirm:
             release_pending_count = 0
+            fast_release_pending_count = 0
             r_pending_count += 1
             if r_pending_count >= cooldown_weeks:
                 current = "433"
@@ -272,8 +320,21 @@ def apply_cooldown(weekly: pd.DataFrame, cooldown_weeks: int = 3) -> pd.DataFram
             else:
                 reason = f"R模式第{r_pending_count}週觀察，暫維持514"
 
+        elif current == "452" and fast_r_confirm:
+            # After fast release to 452, require 2 more confirmations before 433.
+            fast_r_pending_count += 1
+            if fast_r_pending_count >= 2:
+                current = "433"
+                pending = None
+                pending_count = 0
+                reason = "V型急殺後反攻確認連續2週成立，452→433"
+            else:
+                reason = f"V型反攻第{fast_r_pending_count}週觀察，暫維持452"
+
         else:
             r_pending_count = 0
+            if not fast_r_confirm:
+                fast_r_pending_count = 0
             target = raw
 
             if current == "514" and target == "452":
@@ -284,11 +345,13 @@ def apply_cooldown(weekly: pd.DataFrame, cooldown_weeks: int = 3) -> pd.DataFram
                     if release_pending_count >= cooldown_weeks:
                         current = "452"
                         release_pending_count = 0
+                        fast_release_pending_count = 0
                         reason = f"解除防守條件連續{cooldown_weeks}週成立，514→452"
                     else:
                         reason = f"解除防守條件第{release_pending_count}週觀察，暫維持514"
                 else:
                     release_pending_count = 0
+                    fast_release_pending_count = 0
                     reason = "分數降溫但解除防守條件不足，暫維持514"
 
             # Once in 433, if risk rises again, go back to 514 immediately above 56.
@@ -297,6 +360,8 @@ def apply_cooldown(weekly: pd.DataFrame, cooldown_weeks: int = 3) -> pd.DataFram
                 pending = None
                 pending_count = 0
                 release_pending_count = 0
+                fast_release_pending_count = 0
+                fast_r_pending_count = 0
                 reason = "反攻後風險再升，切回514"
 
             elif target != current:
@@ -374,6 +439,7 @@ def make_switch_log(weekly: pd.DataFrame) -> pd.DataFrame:
     cols = [
         "total_score", "final_mode", "raw_mode", "r_count", "r_watch", "r_confirm",
         "r_credit_veto", "r_momentum_veto", "r_score_veto", "release_confirm",
+        "fast_count", "fast_release_confirm", "fast_r_confirm",
         "release_qqq_above_ma60", "release_soxx_above_ma60", "release_credit_above_ma60",
         "market_momentum_score", "credit_proxy_score", "breadth_score", "vix_score",
         "defensive_strength_score", "mode_reason",
@@ -394,7 +460,7 @@ def make_summary(weekly: pd.DataFrame, switch_log: pd.DataFrame, start: str, end
         return pd.Timestamp(x).strftime("%Y-%m-%d")
 
     lines = []
-    lines.append("# V11-Core 2020 COVID Crash Event Backtest R3 Summary")
+    lines.append("# V11-Core 2020 COVID Crash Event Backtest R4 Summary")
     lines.append("")
     lines.append(f"Period: {start} to {end}")
     lines.append("")
@@ -424,7 +490,8 @@ def make_summary(weekly: pd.DataFrame, switch_log: pd.DataFrame, start: str, end
     lines.append("## How to judge this backtest")
     lines.append("- Good: 2020 COVID crash risk expansion shifts to 514 before or during the main drawdown, not after the entire bear market is over.")
     lines.append("- Good: R/433 does not trigger on every short bear-market bounce.")
-    lines.append("- Revised R filter: 433 requires R>=4/5, total_score<=35, credit_proxy_score<12, market_momentum_score<20, and 3 consecutive weekly confirmations by default.")
+    lines.append("- R3 strict filter remains: 433 requires R>=4/5, total_score<=35, credit_proxy_score<12, market_momentum_score<20, and 3 consecutive weekly confirmations by default.
+- R4 fast lane: after a true panic regime, if VIX cools sharply and QQQ/SOXX/credit regain 20D trends, 514 can release to 452 earlier; 433 still needs extra confirmation.")
     lines.append("- Good: Once capital returns, the model can leave 514 instead of staying permanently defensive.")
     lines.append("- Bad: Model stays 452 through the main drawdown.")
     lines.append("- Bad: Model flips between 452/514/433 too often.")
@@ -432,7 +499,7 @@ def make_summary(weekly: pd.DataFrame, switch_log: pd.DataFrame, start: str, end
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run V11-Core 2020 COVID crash event backtest R3.")
+    parser = argparse.ArgumentParser(description="Run V11-Core 2020 COVID crash event backtest R4.")
     parser.add_argument("--start", default=DEFAULT_START)
     parser.add_argument("--end", default=DEFAULT_END)
     # Revised after first backtest: 433 should require more confirmation.

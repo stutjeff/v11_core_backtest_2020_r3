@@ -1,31 +1,34 @@
-# V11-Core 2020 COVID Crash Event Backtest R3
+# V11-Core 2020 COVID Crash Event Backtest R4
 
-這是 V11-Core R3 規則用於 **2020 COVID 崩盤** 的事件型回測。
+這是「全球市場雷達 V11」的 2020 COVID 崩盤事件型回測 R4 版。
 
-目標：
+目標不是預測疫情第一擊，而是驗證：
 
-1. 測試 COVID 第一擊後，資金撤退擴散時，V11 是否能從 452 切到 514。
-2. 測試 2020 急殺急彈後，V11 是否能在資金回流時切到 433。
-3. 觀察 R3 在 V 型反彈中是否太保守。
+1. 第一擊後，資金撤退是否能讓 V11 從 452 切到 514。
+2. 急殺後如果市場快速 V 型反彈，是否能比 R3 更快解除防守。
+3. 解除防守後，是否能等確認再從 452 進入 433。
 
-預設期間：
+## R4 與 R3 差異
 
-```text
-2019-11-01 ～ 2020-12-31
-```
+R3 在 2022 慢熊很穩，但在 2020 急殺急彈中太晚解除防守。
 
-使用 proxy：
+R4 保留 R3 的正常嚴格 R 模式，同時新增「V 型急殺後快速回攻通道」。
 
-```text
-00662 proxy：QQQ
-半導體：SOXX
-信用利差 proxy：HYG/LQD
-市場廣度：RSP/SPY、IWM/SPY、QQQ/RSP
-防禦資產：SHY/SPY
-波動：^VIX
-```
+快速回攻通道條件：
 
-執行：
+- 近 90 日曾出現 VIX > 40
+- 近 90 日總風險分數曾 > 85
+- VIX 自高點回落超過 40%
+- QQQ 站回 20 日線
+- SOXX 站回 20 日線
+- HYG/LQD 站回 20 日線
+- QQQ 20 日報酬轉正
+
+符合 5 項以上：514 → 452。
+
+之後若快速反攻條件繼續成立，連續 2 週後：452 → 433。
+
+## 執行方式
 
 ```bash
 pip install -r requirements.txt
@@ -34,17 +37,6 @@ python v11_core_2020_backtest.py
 
 輸出：
 
-```text
-output/v11_core_2020_weekly_modes.csv
-output/v11_core_2020_switch_log.csv
-output/v11_core_2020_summary.md
-```
-
-判斷重點：
-
-```text
-2020-02～2020-03 是否切 514
-2020-03～2020-04 是否維持防守，還是反應太慢
-2020-04～2020-08 是否能在資金回流後解除防守或切 433
-R3 是否過度保守，錯過 V 型反彈
-```
+- output/v11_core_2020_weekly_modes.csv
+- output/v11_core_2020_switch_log.csv
+- output/v11_core_2020_summary.md
