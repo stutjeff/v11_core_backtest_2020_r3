@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-V11-Core 2020 COVID Crash Event Backtest R4
+V11-Core 2020 COVID Backtest R6
 
 Goal:
-- Test whether V11 can switch from 452 to 514 after COVID shock starts spreading through risk assets.
-- Test whether V11 can later switch from 514 to 433 during the sharp 2020 recovery when R-mode conditions are confirmed.
+- Test whether V11 can switch from 452 to 514 after capital starts leaving risk assets.
+- Test whether V11 can later switch from 514 to 433 when recovery / R-mode conditions are confirmed.
 
 Period default:
 - 2019-11-01 to 2020-12-31
@@ -159,7 +159,7 @@ def score_defensive_strength(df: pd.DataFrame) -> pd.Series:
 
 def compute_r_mode(df: pd.DataFrame, components: pd.DataFrame) -> pd.DataFrame:
     """
-    Stricter V11 R-mode rules, revised after the first 2022 backtest.
+    Stricter V11 R-mode rules plus R4 V-shaped rebound fast lane and R7 stricter medium repair lane.
 
     R2 fixed:
     - 433 triggered too early during bear-market rallies.
@@ -168,6 +168,14 @@ def compute_r_mode(df: pd.DataFrame, components: pd.DataFrame) -> pd.DataFrame:
     - 514 -> 452 release also needs confirmation.
     - In a bear market, simply cooling from 60 score to 35 score is not enough.
       QQQ/SOXX/credit must regain trend before leaving 514.
+
+    R4 adds:
+    - V-shaped rebound fast lane after a true panic regime.
+    - If VIX and total score spiked to panic levels, then VIX cools sharply and QQQ/SOXX/credit regain 20D trends, allow 514 -> 452 earlier.
+
+    R6 added:
+    - Medium repair lane for 2018-like corrections: not severe enough to count as 2020 panic,
+      but recovery should not wait forever if VIX cools, credit stabilizes, and QQQ/SOXX regain 60D trend.
     """
     qqq = df["QQQ"]
     soxx = df["SOXX"]
@@ -219,23 +227,12 @@ def compute_r_mode(df: pd.DataFrame, components: pd.DataFrame) -> pd.DataFrame:
         & conds["release_credit_above_ma60"]
     )
 
-    # R5: V-shaped rebound fast lane, but only after a TRUE acute crash.
-    # R4 helped 2020, but it was too easy to trigger during 2022 bear-market rallies.
-    # R5 therefore requires a panic regime AND a sharp drawdown speed signature.
-    recent_vix_peak_45d = vix.rolling(45, min_periods=10).max()
-    recent_score_peak_45d = components["total_score"].rolling(45, min_periods=10).max()
-    recent_qqq_20d_min_45d = safe_pct_change(qqq, 20).rolling(45, min_periods=10).min()
-    recent_soxx_20d_min_45d = safe_pct_change(soxx, 20).rolling(45, min_periods=10).min()
-    conds["fast_panic_regime"] = (
-        (recent_vix_peak_45d >= 50)
-        | (
-            (recent_vix_peak_45d >= 40)
-            & (recent_score_peak_45d > 85)
-            & (recent_qqq_20d_min_45d <= -0.18)
-            & (recent_soxx_20d_min_45d <= -0.25)
-        )
-    )
-    conds["fast_vix_cooldown"] = (vix / recent_vix_peak_45d - 1.0) <= -0.40
+    # R4: V-shaped rebound fast lane.
+    # This is only armed after a true panic regime, so ordinary bear-market rallies should not pass it easily.
+    recent_vix_peak_90d = vix.rolling(90, min_periods=10).max()
+    recent_score_peak_90d = components["total_score"].rolling(90, min_periods=10).max()
+    conds["fast_panic_regime"] = (recent_vix_peak_90d > 40) & (recent_score_peak_90d > 85)
+    conds["fast_vix_cooldown"] = (vix / recent_vix_peak_90d - 1.0) <= -0.40
     conds["fast_qqq_above_ma20"] = qqq > ma(qqq, 20)
     conds["fast_soxx_above_ma20"] = soxx > ma(soxx, 20)
     conds["fast_credit_above_ma20"] = credit > ma(credit, 20)
@@ -251,14 +248,57 @@ def compute_r_mode(df: pd.DataFrame, components: pd.DataFrame) -> pd.DataFrame:
         "fast_vix_below_35",
     ]].sum(axis=1)
     conds["fast_release_confirm"] = conds["fast_panic_regime"] & (conds["fast_count"] >= 5)
-
-    # Fast 433 is still stricter than fast release: after leaving 514, the market must continue
-    # to confirm recovery instead of only bouncing for one week.
     conds["fast_r_confirm"] = (
         conds["fast_panic_regime"]
         & (conds["fast_count"] >= 6)
         & (components["credit_proxy_score"] < 12)
     )
+
+    # R7: stricter medium repair lane.
+    # For 2018 Q4-like corrections: VIX and score were elevated, but not a full 2020-style panic.
+    # R7 tightens R6 to avoid 2022-style bear-market rallies: momentum repair is mandatory, not just part of a score count.
+    recent_vix_peak_120d = vix.rolling(120, min_periods=20).max()
+    recent_score_peak_120d = components["total_score"].rolling(120, min_periods=20).max()
+    conds["medium_repair_regime"] = (
+        (recent_vix_peak_120d >= 28)
+        & (recent_score_peak_120d >= 75)
+        & (~conds["fast_panic_regime"])
+    )
+    conds["medium_vix_cool"] = vix < 22
+    conds["medium_score_ok"] = components["total_score"] <= 45
+    conds["medium_momentum_ok"] = components["market_momentum_score"] < 20
+    conds["medium_credit_ok"] = components["credit_proxy_score"] < 12
+    conds["medium_qqq_above_ma60"] = qqq > ma(qqq, 60)
+    conds["medium_soxx_above_ma60"] = soxx > ma(soxx, 60)
+    conds["medium_credit_above_ma60"] = credit > ma(credit, 60)
+    conds["medium_qqq_20d_return_positive"] = safe_pct_change(qqq, 20) > 0
+    conds["medium_count"] = conds[[
+        "medium_repair_regime",
+        "medium_vix_cool",
+        "medium_score_ok",
+        "medium_momentum_ok",
+        "medium_credit_ok",
+        "medium_qqq_above_ma60",
+        "medium_soxx_above_ma60",
+        "medium_credit_above_ma60",
+        "medium_qqq_20d_return_positive",
+    ]].sum(axis=1)
+
+    # R7 stricter medium lane:
+    # R6 allowed release when the count reached 7/9. In 2022 this allowed a bear-market rally
+    # to pass even while market_momentum_score was still weak. R7 makes the key repair
+    # conditions mandatory. This should keep the 2018 Q1 repair path, but block 2022-08.
+    conds["medium_release_confirm"] = (
+        conds["medium_repair_regime"]
+        & conds["medium_vix_cool"]
+        & conds["medium_score_ok"]
+        & conds["medium_momentum_ok"]
+        & conds["medium_qqq_above_ma60"]
+        & conds["medium_soxx_above_ma60"]
+        & conds["medium_credit_above_ma60"]
+        & conds["medium_qqq_20d_return_positive"]
+    )
+
     return conds
 
 
@@ -287,6 +327,7 @@ def apply_cooldown(weekly: pd.DataFrame, cooldown_weeks: int = 3) -> pd.DataFram
     release_pending_count = 0
     fast_release_pending_count = 0
     fast_r_pending_count = 0
+    medium_release_pending_count = 0
 
     for _, row in out.iterrows():
         raw = row["raw_mode"]
@@ -295,6 +336,7 @@ def apply_cooldown(weekly: pd.DataFrame, cooldown_weeks: int = 3) -> pd.DataFram
         release_confirm = bool(row.get("release_confirm", False))
         fast_release_confirm = bool(row.get("fast_release_confirm", False))
         fast_r_confirm = bool(row.get("fast_r_confirm", False))
+        medium_release_confirm = bool(row.get("medium_release_confirm", False))
 
         reason = "維持原模式"
 
@@ -306,51 +348,65 @@ def apply_cooldown(weekly: pd.DataFrame, cooldown_weeks: int = 3) -> pd.DataFram
             release_pending_count = 0
             fast_release_pending_count = 0
             fast_r_pending_count = 0
+            medium_release_pending_count = 0
             reason = "風險分數>=75，立即切514防守"
 
         elif current == "514" and fast_release_confirm:
             # R5 fast lane: after a true panic regime, allow earlier release from 514 to 452.
+            pending = None
+            pending_count = 0
             r_pending_count = 0
-            release_pending_count = 0
             fast_release_pending_count += 1
             if fast_release_pending_count >= 1:
                 current = "452"
-                pending = None
-                pending_count = 0
+                release_pending_count = 0
                 reason = "V型急殺後快速回攻通道成立，514→452"
             else:
                 reason = f"快速回攻第{fast_release_pending_count}週觀察，暫維持514"
 
+        elif current == "514" and medium_release_confirm:
+            # R7 stricter medium lane: slower than 2020 fast lane, but avoids weak-momentum bear rallies.
+            pending = None
+            pending_count = 0
+            r_pending_count = 0
+            medium_release_pending_count += 1
+            if medium_release_pending_count >= 2:
+                current = "452"
+                release_pending_count = 0
+                fast_release_pending_count = 0
+                reason = "R7中型修復通道連續2週成立，514→452"
+            else:
+                reason = f"R7中型修復通道第{medium_release_pending_count}週觀察，暫維持514"
+
         elif current == "514" and r_confirm:
             release_pending_count = 0
-            fast_release_pending_count = 0
             r_pending_count += 1
             if r_pending_count >= cooldown_weeks:
                 current = "433"
                 pending = None
                 pending_count = 0
+                fast_release_pending_count = 0
+                fast_r_pending_count = 0
                 reason = f"R模式連續{cooldown_weeks}週成立，切433反攻"
             else:
                 reason = f"R模式第{r_pending_count}週觀察，暫維持514"
 
-        elif current == "452" and fast_r_confirm:
-            # After fast release to 452, require 2 more confirmations before 433.
-            fast_r_pending_count += 1
-            if fast_r_pending_count >= 2:
-                current = "433"
-                pending = None
-                pending_count = 0
-                reason = "V型急殺後反攻確認連續2週成立，452→433"
-            else:
-                reason = f"V型反攻第{fast_r_pending_count}週觀察，暫維持452"
-
         else:
             r_pending_count = 0
-            if not fast_r_confirm:
-                fast_r_pending_count = 0
             target = raw
 
-            if current == "514" and target == "452":
+            if current == "452" and fast_r_confirm:
+                fast_r_pending_count += 1
+                if fast_r_pending_count >= 2:
+                    current = "433"
+                    pending = None
+                    pending_count = 0
+                    release_pending_count = 0
+                    reason = "V型急殺後反攻確認連續2週成立，452→433"
+                else:
+                    reason = f"V型反攻第{fast_r_pending_count}週觀察，暫維持452"
+
+            elif current == "514" and target == "452":
                 pending = None
                 pending_count = 0
                 if release_confirm:
@@ -364,8 +420,8 @@ def apply_cooldown(weekly: pd.DataFrame, cooldown_weeks: int = 3) -> pd.DataFram
                         reason = f"解除防守條件第{release_pending_count}週觀察，暫維持514"
                 else:
                     release_pending_count = 0
-                    fast_release_pending_count = 0
-                    reason = "分數降溫但解除防守條件不足，暫維持514"
+                    medium_release_pending_count = 0
+                reason = "分數降溫但解除防守條件不足，暫維持514"
 
             # Once in 433, if risk rises again, go back to 514 immediately above 56.
             elif current == "433" and target == "514":
@@ -375,6 +431,7 @@ def apply_cooldown(weekly: pd.DataFrame, cooldown_weeks: int = 3) -> pd.DataFram
                 release_pending_count = 0
                 fast_release_pending_count = 0
                 fast_r_pending_count = 0
+                medium_release_pending_count = 0
                 reason = "反攻後風險再升，切回514"
 
             elif target != current:
@@ -453,6 +510,7 @@ def make_switch_log(weekly: pd.DataFrame) -> pd.DataFrame:
         "total_score", "final_mode", "raw_mode", "r_count", "r_watch", "r_confirm",
         "r_credit_veto", "r_momentum_veto", "r_score_veto", "release_confirm",
         "fast_count", "fast_release_confirm", "fast_r_confirm",
+        "medium_repair_regime", "medium_count", "medium_release_confirm",
         "release_qqq_above_ma60", "release_soxx_above_ma60", "release_credit_above_ma60",
         "market_momentum_score", "credit_proxy_score", "breadth_score", "vix_score",
         "defensive_strength_score", "mode_reason",
@@ -473,7 +531,7 @@ def make_summary(weekly: pd.DataFrame, switch_log: pd.DataFrame, start: str, end
         return pd.Timestamp(x).strftime("%Y-%m-%d")
 
     lines = []
-    lines.append("# V11-Core 2020 COVID Crash Event Backtest R4 Summary")
+    lines.append("# V11-Core 2020 COVID Backtest R6 Summary")
     lines.append("")
     lines.append(f"Period: {start} to {end}")
     lines.append("")
@@ -501,10 +559,11 @@ def make_summary(weekly: pd.DataFrame, switch_log: pd.DataFrame, start: str, end
             )
     lines.append("")
     lines.append("## How to judge this backtest")
-    lines.append("- Good: 2020 COVID crash risk expansion shifts to 514 before or during the main drawdown, not after the entire bear market is over.")
-    lines.append("- Good: R/433 does not trigger on every short bear-market bounce.")
-    lines.append("- R3 strict filter remains: 433 requires R>=4/5, total_score<=35, credit_proxy_score<12, market_momentum_score<20, and 3 consecutive weekly confirmations by default.")
+    lines.append("- Good: 2020 COVID crash shifts to 514 during the main drawdown and releases when liquidity repair is confirmed.")
+    lines.append("- Good: R/433 does not trigger on every short bear-market / correction bounce.")
+    lines.append("- Revised R filter: 433 requires R>=4/5, total_score<=35, credit_proxy_score<12, market_momentum_score<20, and 3 consecutive weekly confirmations by default.")
     lines.append("- R5 fast lane: after a true panic regime, if VIX cools sharply and QQQ/SOXX/credit regain 20D trends, 514 can release to 452 earlier; 433 still needs extra confirmation.")
+    lines.append("- R6 medium repair lane remains available, but the main test is whether the true-panic fast lane still captures the 2020 V-shaped recovery.")
     lines.append("- Good: Once capital returns, the model can leave 514 instead of staying permanently defensive.")
     lines.append("- Bad: Model stays 452 through the main drawdown.")
     lines.append("- Bad: Model flips between 452/514/433 too often.")
@@ -512,7 +571,7 @@ def make_summary(weekly: pd.DataFrame, switch_log: pd.DataFrame, start: str, end
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run V11-Core 2020 COVID crash event backtest R4.")
+    parser = argparse.ArgumentParser(description="Run V11-Core 2020 COVID Backtest R6.")
     parser.add_argument("--start", default=DEFAULT_START)
     parser.add_argument("--end", default=DEFAULT_END)
     # Revised after first backtest: 433 should require more confirmation.

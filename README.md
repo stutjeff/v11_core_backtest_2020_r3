@@ -1,30 +1,39 @@
-# V11-Core 2020 COVID Backtest R5-fixed
+# V11-Core 2020 COVID Backtest R7
 
-這是 V11-Core 的 2020 COVID 崩盤回測版。
+測試 R7 在 2020 COVID 急殺急彈環境中，是否仍能啟動快速回攻通道。
 
-R5 = R3 主體 + R4 快速回攻通道，但 R4 通道必須先通過「急殺型危機辨識」。
+## Files
 
-目的：
-- 2020 急殺後，不要像 R3 一樣太晚解除防守。
-- 但也避免 R4 在 2022 這種慢熊中被熊市反彈騙出去。
+- `v11_core_2020_backtest.py`
+- `requirements.txt`
+- `.github/workflows/run-v11-core-2020-backtest.yml`
 
-R5 快速通道只在以下急殺條件成立後才允許：
-- 近 45 日 VIX 曾 >= 50；或
-- 近 45 日 VIX 曾 >= 40，且總分曾 > 85，且 QQQ 20 日跌幅曾 <= -18%，SOXX 20 日跌幅曾 <= -25%。
-
-執行：
+## Run locally
 
 ```bash
 pip install -r requirements.txt
 python v11_core_2020_backtest.py
 ```
 
-輸出：
-- output/v11_core_2020_weekly_modes.csv
-- output/v11_core_2020_switch_log.csv
-- output/v11_core_2020_summary.md
+## GitHub Actions
+
+Go to **Actions → Run V11-Core 2020 COVID Backtest R7 → Run workflow**.
+
+Outputs:
+
+- `output/v11_core_2020_weekly_modes.csv`
+- `output/v11_core_2020_switch_log.csv`
+- `output/v11_core_2020_summary.md`
+
+## R7 logic
+
+R7 = R5-fixed + medium repair lane.
+
+- Slow bear / valuation compression: keep R3-style defensive confirmation.
+- True panic: allow R4-style fast release only when fast panic regime is confirmed.
+- Medium correction: allow 514 → 452 only after medium repair confirmation, not direct 433.
 
 
-## R5-fixed 修正
+## R7 update
 
-這版修正快速回攻通道：`fast_release_confirm` 與 `fast_r_confirm` 必須同時滿足 `fast_panic_regime == True`，避免 2022 慢熊反彈被誤判成 2020 類型 V 型急殺反彈。
+R7 tightens the medium repair lane. In R6, a 7/9 count could release 514 to 452 even when market momentum was still weak. R7 requires momentum repair, QQQ/SOXX 60D repair, credit 60D repair, VIX cooling, score cooling, and positive QQQ 20D return. The goal is to keep the 2018 repair benefit while blocking 2022-style bear-market rallies.
